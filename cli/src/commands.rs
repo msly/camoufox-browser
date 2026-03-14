@@ -108,6 +108,211 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
             _ => Ok(json!({ "id": id, "action": "tab_list" })),
         },
 
+        // === Frame ===
+        "frame" => {
+            if rest.first().copied() == Some("main") {
+                Ok(json!({ "id": id, "action": "mainframe" }))
+            } else {
+                let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                    context: "frame".to_string(),
+                    usage: "frame <selector|main>",
+                })?;
+                Ok(json!({ "id": id, "action": "frame", "selector": sel }))
+            }
+        }
+
+        // === Dialog ===
+        "dialog" => match rest.first().copied() {
+            Some("accept") => {
+                let mut cmd = json!({ "id": id, "action": "dialog", "response": "accept" });
+                if let Some(prompt_text) = rest.get(1) {
+                    cmd["promptText"] = json!(prompt_text);
+                }
+                Ok(cmd)
+            }
+            Some("dismiss") => {
+                let mut cmd = json!({ "id": id, "action": "dialog", "response": "dismiss" });
+                if let Some(prompt_text) = rest.get(1) {
+                    cmd["promptText"] = json!(prompt_text);
+                }
+                Ok(cmd)
+            }
+            Some(sub) => Err(ParseError::InvalidValue {
+                message: format!("Unknown dialog subcommand: {}", sub),
+                usage: "dialog <accept|dismiss> [text]",
+            }),
+            None => Err(ParseError::MissingArguments {
+                context: "dialog".to_string(),
+                usage: "dialog <accept|dismiss> [text]",
+            }),
+        },
+
+        "console" => {
+            let clear = rest.contains(&"--clear");
+            Ok(json!({ "id": id, "action": "console", "clear": clear }))
+        }
+        "errors" => {
+            let clear = rest.contains(&"--clear");
+            Ok(json!({ "id": id, "action": "errors", "clear": clear }))
+        }
+        "highlight" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "highlight".to_string(),
+                usage: "highlight <selector>",
+            })?;
+            Ok(json!({ "id": id, "action": "highlight", "selector": sel }))
+        }
+
+        // === Storage ===
+        "storage" => match rest.first().copied() {
+            Some("local") | Some("session") => {
+                let storage_type = rest.first().unwrap();
+                let op = rest.get(1).unwrap_or(&"get");
+                let key = rest.get(2);
+                let value = rest.get(3);
+                match *op {
+                    "set" => {
+                        let k = key.ok_or_else(|| ParseError::MissingArguments {
+                            context: format!("storage {} set", storage_type),
+                            usage: "storage <local|session> set <key> <value>",
+                        })?;
+                        let v = value.ok_or_else(|| ParseError::MissingArguments {
+                            context: format!("storage {} set", storage_type),
+                            usage: "storage <local|session> set <key> <value>",
+                        })?;
+                        Ok(json!({ "id": id, "action": "storage_set", "type": storage_type, "key": k, "value": v }))
+                    }
+                    "clear" => Ok(json!({ "id": id, "action": "storage_clear", "type": storage_type })),
+                    _ => {
+                        let mut cmd = json!({ "id": id, "action": "storage_get", "type": storage_type });
+                        if let Some(k) = key {
+                            cmd.as_object_mut()
+                                .unwrap()
+                                .insert("key".to_string(), json!(k));
+                        }
+                        Ok(cmd)
+                    }
+                }
+            }
+            Some(sub) => Err(ParseError::InvalidValue {
+                message: format!("Unknown storage type: {}", sub),
+                usage: "storage <local|session> [get|set|clear] [key] [value]",
+            }),
+            None => Err(ParseError::MissingArguments {
+                context: "storage".to_string(),
+                usage: "storage <local|session> [get|set|clear] [key] [value]",
+            }),
+        },
+
+        // === Cookies ===
+        "cookies" => {
+            let op = rest.first().unwrap_or(&"get");
+            match *op {
+                "set" => {
+                    let name = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                        context: "cookies set".to_string(),
+                        usage: "cookies set <name> <value> [--url <url>] [--domain <domain>] [--path <path>] [--httpOnly] [--secure] [--sameSite <Strict|Lax|None>] [--expires <timestamp>]",
+                    })?;
+                    let value = rest.get(2).ok_or_else(|| ParseError::MissingArguments {
+                        context: "cookies set".to_string(),
+                        usage: "cookies set <name> <value> [--url <url>] [--domain <domain>] [--path <path>] [--httpOnly] [--secure] [--sameSite <Strict|Lax|None>] [--expires <timestamp>]",
+                    })?;
+
+                    let mut cookie = json!({ "name": name, "value": value });
+
+                    let mut i = 3;
+                    while i < rest.len() {
+                        match rest[i] {
+                            "--url" => {
+                                if let Some(url) = rest.get(i + 1) {
+                                    cookie["url"] = json!(url);
+                                    i += 2;
+                                } else {
+                                    return Err(ParseError::MissingArguments {
+                                        context: "cookies set --url".to_string(),
+                                        usage: "--url <url>",
+                                    });
+                                }
+                            }
+                            "--domain" => {
+                                if let Some(domain) = rest.get(i + 1) {
+                                    cookie["domain"] = json!(domain);
+                                    i += 2;
+                                } else {
+                                    return Err(ParseError::MissingArguments {
+                                        context: "cookies set --domain".to_string(),
+                                        usage: "--domain <domain>",
+                                    });
+                                }
+                            }
+                            "--path" => {
+                                if let Some(path) = rest.get(i + 1) {
+                                    cookie["path"] = json!(path);
+                                    i += 2;
+                                } else {
+                                    return Err(ParseError::MissingArguments {
+                                        context: "cookies set --path".to_string(),
+                                        usage: "--path <path>",
+                                    });
+                                }
+                            }
+                            "--httpOnly" => {
+                                cookie["httpOnly"] = json!(true);
+                                i += 1;
+                            }
+                            "--secure" => {
+                                cookie["secure"] = json!(true);
+                                i += 1;
+                            }
+                            "--sameSite" => {
+                                if let Some(same_site) = rest.get(i + 1) {
+                                    if *same_site == "Strict" || *same_site == "Lax" || *same_site == "None" {
+                                        cookie["sameSite"] = json!(same_site);
+                                        i += 2;
+                                    } else {
+                                        return Err(ParseError::MissingArguments {
+                                            context: "cookies set --sameSite".to_string(),
+                                            usage: "--sameSite <Strict|Lax|None>",
+                                        });
+                                    }
+                                } else {
+                                    return Err(ParseError::MissingArguments {
+                                        context: "cookies set --sameSite".to_string(),
+                                        usage: "--sameSite <Strict|Lax|None>",
+                                    });
+                                }
+                            }
+                            "--expires" => {
+                                if let Some(expires_str) = rest.get(i + 1) {
+                                    if let Ok(expires) = expires_str.parse::<i64>() {
+                                        cookie["expires"] = json!(expires);
+                                        i += 2;
+                                    } else {
+                                        return Err(ParseError::MissingArguments {
+                                            context: "cookies set --expires".to_string(),
+                                            usage: "--expires <timestamp>",
+                                        });
+                                    }
+                                } else {
+                                    return Err(ParseError::MissingArguments {
+                                        context: "cookies set --expires".to_string(),
+                                        usage: "--expires <timestamp>",
+                                    });
+                                }
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    }
+
+                    Ok(json!({ "id": id, "action": "cookies_set", "cookies": [cookie] }))
+                }
+                "clear" => Ok(json!({ "id": id, "action": "cookies_clear" })),
+                _ => Ok(json!({ "id": id, "action": "cookies_get" })),
+            }
+        }
+
         "snapshot" => {
             let mut cmd = json!({ "id": id, "action": "snapshot" });
             let obj = cmd.as_object_mut().unwrap();
@@ -257,6 +462,55 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 Ok(json!({ "id": id, "action": "click", "selector": sel }))
             }
         }
+        "dblclick" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "dblclick".to_string(),
+                usage: "dblclick <selector>",
+            })?;
+            Ok(json!({ "id": id, "action": "dblclick", "selector": sel }))
+        }
+        "focus" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "focus".to_string(),
+                usage: "focus <selector>",
+            })?;
+            Ok(json!({ "id": id, "action": "focus", "selector": sel }))
+        }
+        "drag" => {
+            let src = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "drag".to_string(),
+                usage: "drag <source> <target>",
+            })?;
+            let tgt = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                context: "drag".to_string(),
+                usage: "drag <source> <target>",
+            })?;
+            Ok(json!({ "id": id, "action": "drag", "source": src, "target": tgt }))
+        }
+        "upload" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "upload".to_string(),
+                usage: "upload <selector> <files...>",
+            })?;
+            if rest.len() < 2 {
+                return Err(ParseError::MissingArguments {
+                    context: "upload".to_string(),
+                    usage: "upload <selector> <files...>",
+                });
+            }
+            Ok(json!({ "id": id, "action": "upload", "selector": sel, "files": &rest[1..] }))
+        }
+        "download" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "download".to_string(),
+                usage: "download <selector> <path>",
+            })?;
+            let path = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                context: "download".to_string(),
+                usage: "download <selector> <path>",
+            })?;
+            Ok(json!({ "id": id, "action": "download", "selector": sel, "path": path }))
+        }
         "fill" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "fill".to_string(),
@@ -319,6 +573,52 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 Ok(json!({ "id": id, "action": "press", "selector": selector, "key": key }))
             } else {
                 Ok(json!({ "id": id, "action": "press", "key": key }))
+            }
+        }
+        "keydown" => {
+            let key = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "keydown".to_string(),
+                usage: "keydown <key>",
+            })?;
+            Ok(json!({ "id": id, "action": "keydown", "key": key }))
+        }
+        "keyup" => {
+            let key = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "keyup".to_string(),
+                usage: "keyup <key>",
+            })?;
+            Ok(json!({ "id": id, "action": "keyup", "key": key }))
+        }
+        "keyboard" => {
+            let sub = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "keyboard".to_string(),
+                usage: "keyboard <type|inserttext> <text>",
+            })?;
+            match *sub {
+                "type" => {
+                    let text: String = rest[1..].join(" ");
+                    if text.is_empty() {
+                        return Err(ParseError::MissingArguments {
+                            context: "keyboard type".to_string(),
+                            usage: "keyboard type <text>",
+                        });
+                    }
+                    Ok(json!({ "id": id, "action": "keyboard", "subaction": "type", "text": text }))
+                }
+                "inserttext" | "insertText" => {
+                    let text: String = rest[1..].join(" ");
+                    if text.is_empty() {
+                        return Err(ParseError::MissingArguments {
+                            context: "keyboard inserttext".to_string(),
+                            usage: "keyboard inserttext <text>",
+                        });
+                    }
+                    Ok(json!({ "id": id, "action": "keyboard", "subaction": "insertText", "text": text }))
+                }
+                _ => Err(ParseError::InvalidValue {
+                    message: format!("Unknown keyboard subcommand: {}", sub),
+                    usage: "keyboard <type|inserttext> <text>",
+                }),
             }
         }
 

@@ -73,14 +73,31 @@ Notes:
 
 - Navigation: `open|goto|navigate`, `back`, `forward`, `reload`, `close`
 - Tabs: `tab [new [url]|list|close [n]|<n>]`
+- Frame: `frame <selector|main>` (alias: `frame main` → `mainframe`)
+- Dialog: `dialog <accept|dismiss> [text]`
 - Snapshot: `snapshot [-i] [-c] [-C] [--depth N] [--selector <css>]`
 - Eval: `eval [-b|--base64] [--stdin] <script>`
-- Interact: `click`, `fill`, `type`, `press`, `hover`, `check`, `uncheck`, `select`
+- Interact: `click`, `dblclick`, `focus`, `fill`, `type`, `press`, `hover`, `check`, `uncheck`, `select`, `drag`, `upload`, `download`
+- Keyboard: `keydown <key>`, `keyup <key>`, `keyboard <type|inserttext> <text>`
 - Scroll: `scroll [direction] [amount] [--selector <css>]`, `scrollintoview <selector>`
 - Get: `get url|title|text|html|value|attr|count|box|styles`
 - Is: `is visible|enabled|checked <selector>`
 - Wait: `wait <ms|selector|@ref>` or `wait --url <pattern>` / `wait --load <state>` / `wait --text <text>`
 - Screenshot: `screenshot [selector|@ref] [path]` (also supports `--full-page`, `--format`, `--quality`)
+- Debug: `console [--clear]`, `errors [--clear]`, `highlight <selector>`
+- Storage: `cookies [get|set|clear]`, `storage <local|session> [get|set|clear] [key] [value]`
+
+## Gap vs agent-browser
+
+`camoufox-browser` focuses on a **high-frequency drop-in subset**. If you need full `agent-browser` functionality, use `agent-browser` directly.
+
+Not yet implemented in `camoufox-browser` (non-exhaustive):
+
+- Network tooling: `route`, `unroute`, `requests`, `responsebody`
+- Locator helpers: `find`, `getbyrole`/`getbytext`/... and related subcommands (`nth`, etc.)
+- State vault: `state save|load|list|show|clear|rename|clean`
+- Recording / profiling: HAR/recording/profiler/screencast commands
+- Misc: `pdf`, `clipboard`, touch/mouse low-level input, permissions/geolocation/media emulation, devtools inspect/pause, diff tools
 
 ## More examples
 
@@ -100,6 +117,16 @@ Use a persistent profile directory:
 
 ```bash
 camoufox-browser --profile ~/.camoufox-profile open https://example.com
+```
+
+Manage cookies and web storage:
+
+```bash
+camoufox-browser cookies
+camoufox-browser cookies set sid abc --url https://example.com --httpOnly --secure
+camoufox-browser storage local set theme dark
+camoufox-browser storage local get theme
+camoufox-browser storage local
 ```
 
 ## Why “npm package + Rust”?

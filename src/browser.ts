@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
+import type { Browser, BrowserContext, Dialog, Frame, Locator, Page } from "playwright-core";
 import { getEnhancedSnapshot, parseRef, type EnhancedSnapshot, type RefMap, type SnapshotOptions } from "./snapshot.js";
 
 export type LaunchConfig = {
@@ -24,8 +24,14 @@ export class BrowserManager {
   private context: BrowserContext | null = null;
   private pages: Page[] = [];
   private activePageIndex = 0;
+  private activeFrame: Frame | null = null;
   private isPersistentContext = false;
   private launchConfig: LaunchConfig | null = null;
+  private dialogHandler: ((dialog: Dialog) => Promise<void>) | null = null;
+  private dialogHandlerPage: Page | null = null;
+
+  private consoleMessages: Array<{ type: string; text: string; timestamp: number }> = [];
+  private pageErrors: Array<{ message: string; timestamp: number }> = [];
 
   private refMap: RefMap = {};
   private lastSnapshot = "";
@@ -46,6 +52,7 @@ export class BrowserManager {
     this.trackPage(page);
     this.activePageIndex = this.pages.indexOf(page);
     if (this.activePageIndex < 0) this.activePageIndex = 0;
+    this.activeFrame = null;
     await page.bringToFront().catch(() => {});
   }
 
@@ -57,6 +64,11 @@ export class BrowserManager {
     return page;
   }
 
+  getFrame(): Frame {
+    if (this.activeFrame) return this.activeFrame;
+    return this.getPage().mainFrame();
+  }
+
   getContext(): BrowserContext {
     if (!this.context) {
       throw new Error("Browser not launched. Call open first.");
@@ -66,6 +78,22 @@ export class BrowserManager {
 
   getActiveIndex(): number {
     return this.activePageIndex;
+  }
+
+  getConsoleMessages(): Array<{ type: string; text: string; timestamp: number }> {
+    return this.consoleMessages;
+  }
+
+  clearConsoleMessages(): void {
+    this.consoleMessages = [];
+  }
+
+  getPageErrors(): Array<{ message: string; timestamp: number }> {
+    return this.pageErrors;
+  }
+
+  clearPageErrors(): void {
+    this.pageErrors = [];
   }
 
   getLastSnapshot(): string {
@@ -84,9 +112,24 @@ export class BrowserManager {
     if (this.pages.includes(page)) return;
     this.pages.push(page);
 
+    page.on("console", (msg) => {
+      this.consoleMessages.push({
+        type: msg.type(),
+        text: msg.text(),
+        timestamp: Date.now()
+      });
+    });
+
+    page.on("pageerror", (error) => {
+      this.pageErrors.push({ message: error.message, timestamp: Date.now() });
+    });
+
     page.on("close", () => {
       const idx = this.pages.indexOf(page);
       if (idx < 0) return;
+      if (idx === this.activePageIndex) {
+        this.activeFrame = null;
+      }
       this.pages.splice(idx, 1);
       if (this.pages.length === 0) {
         this.activePageIndex = 0;
@@ -106,6 +149,7 @@ export class BrowserManager {
       const idx = this.pages.indexOf(page);
       if (idx >= 0 && idx !== this.activePageIndex) {
         this.activePageIndex = idx;
+        this.activeFrame = null;
       }
     });
   }
@@ -213,6 +257,7 @@ export class BrowserManager {
     this.trackPage(page);
     this.activePageIndex = this.pages.indexOf(page);
     if (this.activePageIndex < 0) this.activePageIndex = Math.max(0, this.pages.length - 1);
+    this.activeFrame = null;
     await page.bringToFront().catch(() => {});
     return page;
   }
@@ -227,6 +272,7 @@ export class BrowserManager {
       throw new Error(`Invalid tab index: ${index}. Available: 0-${Math.max(0, this.pages.length - 1)}`);
     }
     this.activePageIndex = index;
+    this.activeFrame = null;
     const page = this.getPage();
     await page.bringToFront().catch(() => {});
     return { index: this.activePageIndex, url: page.url(), title: "" };
@@ -271,8 +317,8 @@ export class BrowserManager {
   }
 
   async getSnapshot(options?: SnapshotOptions): Promise<EnhancedSnapshot> {
-    const page = this.getPage();
-    const snapshot = await getEnhancedSnapshot(page, options);
+    const frame = this.getFrame();
+    const snapshot = await getEnhancedSnapshot(frame, options);
     this.refMap = snapshot.refs;
     this.lastSnapshot = snapshot.tree;
     return snapshot;
@@ -285,13 +331,13 @@ export class BrowserManager {
     const refData = this.refMap[ref];
     if (!refData) return null;
 
-    const page = this.getPage();
+    const frame = this.getFrame();
 
     if (refData.role === "clickable" || refData.role === "focusable") {
-      return page.locator(refData.selector);
+      return frame.locator(refData.selector);
     }
 
-    let locator: Locator = page.getByRole(refData.role as any, {
+    let locator: Locator = frame.getByRole(refData.role as any, {
       name: refData.name,
       exact: true
     });
@@ -306,7 +352,62 @@ export class BrowserManager {
   getLocator(selectorOrRef: string): Locator {
     const refLocator = this.getLocatorFromRef(selectorOrRef);
     if (refLocator) return refLocator;
-    return this.getPage().locator(selectorOrRef);
+    return this.getFrame().locator(selectorOrRef);
+  }
+
+  switchToMainFrame(): void {
+    this.activeFrame = null;
+  }
+
+  async switchToFrame(options: { selector?: string; name?: string; url?: string }): Promise<void> {
+    const page = this.getPage();
+
+    if (options.selector) {
+      const frameElement = await page.$(options.selector);
+      if (!frameElement) {
+        throw new Error(`Frame not found: ${options.selector}`);
+      }
+      const frame = await frameElement.contentFrame();
+      if (!frame) {
+        throw new Error(`Element is not a frame: ${options.selector}`);
+      }
+      this.activeFrame = frame;
+      return;
+    }
+
+    if (options.name) {
+      const frame = page.frame({ name: options.name });
+      if (!frame) throw new Error(`Frame not found with name: ${options.name}`);
+      this.activeFrame = frame;
+      return;
+    }
+
+    if (options.url) {
+      const frame = page.frame({ url: options.url });
+      if (!frame) throw new Error(`Frame not found with URL: ${options.url}`);
+      this.activeFrame = frame;
+      return;
+    }
+
+    throw new Error("Missing frame selector");
+  }
+
+  setDialogHandler(response: "accept" | "dismiss", promptText?: string): void {
+    const page = this.getPage();
+
+    if (this.dialogHandler && this.dialogHandlerPage) {
+      this.dialogHandlerPage.removeListener("dialog", this.dialogHandler);
+    }
+
+    this.dialogHandler = async (dialog: Dialog) => {
+      if (response === "accept") {
+        await dialog.accept(promptText);
+      } else {
+        await dialog.dismiss();
+      }
+    };
+    this.dialogHandlerPage = page;
+    page.on("dialog", this.dialogHandler);
   }
 
   async close(): Promise<void> {
@@ -317,8 +418,11 @@ export class BrowserManager {
     this.context = null;
     this.pages = [];
     this.activePageIndex = 0;
+    this.activeFrame = null;
     this.isPersistentContext = false;
     this.launchConfig = null;
+    this.dialogHandler = null;
+    this.dialogHandlerPage = null;
     this.refMap = {};
     this.lastSnapshot = "";
 

@@ -274,9 +274,29 @@ export class DaemonServer {
         cmd.action === "scroll" ||
         cmd.action === "scrollintoview" ||
         cmd.action === "click" ||
+        cmd.action === "dblclick" ||
+        cmd.action === "focus" ||
+        cmd.action === "drag" ||
+        cmd.action === "upload" ||
+        cmd.action === "download" ||
+        cmd.action === "frame" ||
+        cmd.action === "mainframe" ||
+        cmd.action === "dialog" ||
+        cmd.action === "console" ||
+        cmd.action === "errors" ||
+        cmd.action === "highlight" ||
+        cmd.action === "cookies_get" ||
+        cmd.action === "cookies_set" ||
+        cmd.action === "cookies_clear" ||
+        cmd.action === "storage_get" ||
+        cmd.action === "storage_set" ||
+        cmd.action === "storage_clear" ||
         cmd.action === "fill" ||
         cmd.action === "type" ||
         cmd.action === "press" ||
+        cmd.action === "keydown" ||
+        cmd.action === "keyup" ||
+        cmd.action === "keyboard" ||
         cmd.action === "hover" ||
         cmd.action === "check" ||
         cmd.action === "uncheck" ||
@@ -397,6 +417,26 @@ export class DaemonServer {
           const result = await this.browser.closeTab(index);
           return successResponse(cmd.id, result);
         }
+        case "frame": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          await this.browser.switchToFrame({ selector });
+          return successResponse(cmd.id, { switched: true });
+        }
+        case "mainframe": {
+          this.browser.switchToMainFrame();
+          return successResponse(cmd.id, { switched: true });
+        }
+        case "dialog": {
+          const response =
+            (cmd as any).response === "accept" || (cmd as any).response === "dismiss"
+              ? ((cmd as any).response as "accept" | "dismiss")
+              : null;
+          if (!response) return errorResponse(cmd.id, "Missing response");
+          const promptText = typeof (cmd as any).promptText === "string" ? ((cmd as any).promptText as string) : undefined;
+          this.browser.setDialogHandler(response, promptText);
+          return successResponse(cmd.id, { handler: "set", response });
+        }
         case "url": {
           const page = this.browser.getPage();
           return successResponse(cmd.id, { url: page.url() });
@@ -430,6 +470,118 @@ export class DaemonServer {
             refs: Object.keys(simpleRefs).length > 0 ? simpleRefs : undefined,
             origin: page.url()
           });
+        }
+        case "console": {
+          const clear = (cmd as any).clear === true;
+          if (clear) {
+            this.browser.clearConsoleMessages();
+            return successResponse(cmd.id, { cleared: true });
+          }
+          const page = this.browser.getPage();
+          const messages = this.browser.getConsoleMessages();
+          return successResponse(cmd.id, { messages, origin: page.url() });
+        }
+        case "errors": {
+          const clear = (cmd as any).clear === true;
+          if (clear) {
+            this.browser.clearPageErrors();
+            return successResponse(cmd.id, { cleared: true });
+          }
+          const errors = this.browser.getPageErrors();
+          return successResponse(cmd.id, { errors });
+        }
+        case "highlight": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          await this.browser.getLocator(selector).highlight();
+          return successResponse(cmd.id, { highlighted: true });
+        }
+        case "cookies_get": {
+          const page = this.browser.getPage();
+          const context = page.context();
+          const urlsRaw = (cmd as any).urls;
+          const urls =
+            Array.isArray(urlsRaw) && urlsRaw.every((u) => typeof u === "string") ? (urlsRaw as string[]) : undefined;
+          const cookies = urls ? await context.cookies(urls) : await context.cookies();
+          return successResponse(cmd.id, { cookies });
+        }
+        case "cookies_set": {
+          const page = this.browser.getPage();
+          const context = page.context();
+          const cookiesRaw = (cmd as any).cookies;
+          if (!Array.isArray(cookiesRaw) || cookiesRaw.length === 0) return errorResponse(cmd.id, "Missing cookies");
+
+          const pageUrl = page.url();
+          const cookies = cookiesRaw
+            .filter(
+              (c): c is Record<string, unknown> =>
+                typeof c === "object" &&
+                c !== null &&
+                typeof (c as any).name === "string" &&
+                typeof (c as any).value === "string"
+            )
+            .map((cookie) => {
+              if (!(cookie as any).url && !(cookie as any).domain && !(cookie as any).path) {
+                return { ...cookie, url: pageUrl };
+              }
+              return cookie;
+            });
+
+          if (cookies.length === 0) return errorResponse(cmd.id, "Missing cookies");
+          await context.addCookies(cookies as any);
+          return successResponse(cmd.id, { set: true });
+        }
+        case "cookies_clear": {
+          const page = this.browser.getPage();
+          const context = page.context();
+          await context.clearCookies();
+          return successResponse(cmd.id, { cleared: true });
+        }
+        case "storage_get": {
+          const page = this.browser.getPage();
+          const type = typeof (cmd as any).type === "string" ? ((cmd as any).type as string) : "";
+          if (type !== "local" && type !== "session") return errorResponse(cmd.id, "Missing storage type");
+          const storageType = type === "local" ? "localStorage" : "sessionStorage";
+          const key = typeof (cmd as any).key === "string" ? ((cmd as any).key as string) : "";
+
+          if (key) {
+            const value = await page.evaluate(`${storageType}.getItem(${JSON.stringify(key)})`);
+            return successResponse(cmd.id, { key, value });
+          }
+
+          const data = await page.evaluate(`
+            (() => {
+              const storage = ${storageType};
+              const result = {};
+              for (let i = 0; i < storage.length; i++) {
+                const k = storage.key(i);
+                if (k) result[k] = storage.getItem(k);
+              }
+              return result;
+            })()
+          `);
+          return successResponse(cmd.id, { data });
+        }
+        case "storage_set": {
+          const page = this.browser.getPage();
+          const type = typeof (cmd as any).type === "string" ? ((cmd as any).type as string) : "";
+          if (type !== "local" && type !== "session") return errorResponse(cmd.id, "Missing storage type");
+          const storageType = type === "local" ? "localStorage" : "sessionStorage";
+          const key = typeof (cmd as any).key === "string" ? ((cmd as any).key as string) : "";
+          const value = typeof (cmd as any).value === "string" ? ((cmd as any).value as string) : "";
+          if (!key) return errorResponse(cmd.id, "Missing key");
+
+          await page.evaluate(`${storageType}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`);
+          return successResponse(cmd.id, { set: true });
+        }
+        case "storage_clear": {
+          const page = this.browser.getPage();
+          const type = typeof (cmd as any).type === "string" ? ((cmd as any).type as string) : "";
+          if (type !== "local" && type !== "session") return errorResponse(cmd.id, "Missing storage type");
+          const storageType = type === "local" ? "localStorage" : "sessionStorage";
+
+          await page.evaluate(`${storageType}.clear()`);
+          return successResponse(cmd.id, { cleared: true });
         }
         case "evaluate": {
           const page = this.browser.getPage();
@@ -511,6 +663,58 @@ export class DaemonServer {
           await locator.click();
           return successResponse(cmd.id, { clicked: true });
         }
+        case "dblclick": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          await this.browser.getLocator(selector).dblclick();
+          return successResponse(cmd.id, { clicked: true });
+        }
+        case "focus": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          await this.browser.getLocator(selector).focus();
+          return successResponse(cmd.id, { focused: true });
+        }
+        case "drag": {
+          const source = typeof (cmd as any).source === "string" ? ((cmd as any).source as string) : "";
+          const target = typeof (cmd as any).target === "string" ? ((cmd as any).target as string) : "";
+          if (!source || !target) return errorResponse(cmd.id, "Missing source/target");
+          await this.browser.getLocator(source).dragTo(this.browser.getLocator(target));
+          return successResponse(cmd.id, { dragged: true });
+        }
+        case "upload": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const filesRaw = (cmd as any).files;
+          const files =
+            typeof filesRaw === "string"
+              ? [filesRaw]
+              : Array.isArray(filesRaw) && filesRaw.every((f) => typeof f === "string")
+                ? (filesRaw as string[])
+                : [];
+          if (files.length === 0) return errorResponse(cmd.id, "Missing files");
+          await this.browser.getLocator(selector).setInputFiles(files);
+          return successResponse(cmd.id, { uploaded: files });
+        }
+        case "download": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const outPath = typeof (cmd as any).path === "string" ? ((cmd as any).path as string) : "";
+          if (!outPath) return errorResponse(cmd.id, "Missing path");
+
+          const page = this.browser.getPage();
+          const locator = this.browser.getLocator(selector);
+
+          await fsPromises.mkdir(path.dirname(outPath), { recursive: true });
+
+          const [download] = await Promise.all([page.waitForEvent("download"), locator.click()]);
+          await download.saveAs(outPath);
+
+          return successResponse(cmd.id, {
+            path: outPath,
+            suggestedFilename: download.suggestedFilename()
+          });
+        }
         case "fill": {
           const selector = typeof cmd.selector === "string" ? cmd.selector : "";
           if (!selector) return errorResponse(cmd.id, "Missing selector");
@@ -535,6 +739,37 @@ export class DaemonServer {
             await this.browser.getPage().keyboard.press(key);
           }
           return successResponse(cmd.id, { pressed: true });
+        }
+        case "keydown": {
+          const key = typeof cmd.key === "string" ? cmd.key : "";
+          if (!key) return errorResponse(cmd.id, "Missing key");
+          const page = this.browser.getPage();
+          await page.keyboard.down(key);
+          return successResponse(cmd.id, { down: true, key });
+        }
+        case "keyup": {
+          const key = typeof cmd.key === "string" ? cmd.key : "";
+          if (!key) return errorResponse(cmd.id, "Missing key");
+          const page = this.browser.getPage();
+          await page.keyboard.up(key);
+          return successResponse(cmd.id, { up: true, key });
+        }
+        case "keyboard": {
+          const page = this.browser.getPage();
+          const subaction =
+            typeof (cmd as any).subaction === "string" ? (((cmd as any).subaction as string) || "type") : "type";
+          const text = typeof (cmd as any).text === "string" ? ((cmd as any).text as string) : "";
+
+          if (subaction === "type") {
+            await page.keyboard.type(text);
+            return successResponse(cmd.id, { typed: true, text });
+          }
+          if (subaction === "insertText") {
+            await page.keyboard.insertText(text);
+            return successResponse(cmd.id, { inserted: true, text });
+          }
+
+          return errorResponse(cmd.id, `Unknown keyboard subaction: ${subaction}`);
         }
         case "hover": {
           const selector = typeof cmd.selector === "string" ? cmd.selector : "";
@@ -683,6 +918,7 @@ export class DaemonServer {
         }
         case "wait": {
           const page = this.browser.getPage();
+          const frame = this.browser.getFrame();
           const timeout = typeof cmd.timeout === "number" ? cmd.timeout : undefined;
 
           if (typeof cmd.text === "string" && cmd.text.length > 0) {
@@ -703,7 +939,7 @@ export class DaemonServer {
             if (locator) {
               await locator.waitFor({ state, timeout });
             } else {
-              await page.waitForSelector(cmd.selector, { state, timeout });
+              await frame.waitForSelector(cmd.selector, { state, timeout });
             }
             return successResponse(cmd.id, { waited: true });
           }

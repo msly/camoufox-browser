@@ -10,6 +10,52 @@ pub fn print_response(resp: &Response) {
         return;
     };
 
+    // Console logs: { messages: [...] }
+    if let Some(messages) = data.get("messages").and_then(|v| v.as_array()) {
+        for msg in messages {
+            let level = msg.get("type").and_then(|v| v.as_str()).unwrap_or("log");
+            let text = msg.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            println!("[{}] {}", level, text);
+        }
+        return;
+    }
+
+    // Page errors: { errors: [...] }
+    if let Some(errors) = data.get("errors").and_then(|v| v.as_array()) {
+        for err in errors {
+            let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{}", msg);
+        }
+        return;
+    }
+
+    // Cookies: { cookies: [...] }
+    if let Some(cookies) = data.get("cookies").and_then(|v| v.as_array()) {
+        for cookie in cookies {
+            let name = cookie.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let value = cookie.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            if !name.is_empty() {
+                println!("{}={}", name, value);
+            }
+        }
+        return;
+    }
+
+    // Cleared markers: { cleared: true }
+    if let Some(true) = data.get("cleared").and_then(|v| v.as_bool()) {
+        println!("Cleared");
+        return;
+    }
+
+    // Storage dump: { data: {...} }
+    if let Some(storage) = data.get("data") {
+        if storage.is_object() {
+            let formatted = serde_json::to_string_pretty(storage).unwrap_or_else(|_| storage.to_string());
+            println!("{}", formatted);
+            return;
+        }
+    }
+
     // Tabs list
     if let Some(tabs) = data.get("tabs").and_then(|v| v.as_array()) {
         for (i, tab) in tabs.iter().enumerate() {

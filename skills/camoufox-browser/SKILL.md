@@ -55,6 +55,33 @@ Use `camoufox-browser` when a site blocks standard Playwright/Chromium automatio
   - `camoufox-browser --session <s> get attr @e1 href`
   - `camoufox-browser --session <s> get count "a"`
   - `camoufox-browser --session <s> is visible @e1`
+- Extra interact:
+  - `camoufox-browser --session <s> dblclick @e1`
+  - `camoufox-browser --session <s> focus @e2`
+  - `camoufox-browser --session <s> drag @e1 @e2`
+  - `camoufox-browser --session <s> upload "input[type=file]" ./a.png ./b.png`
+  - `camoufox-browser --session <s> download "a.export" ./out/report.pdf`
+- Frame + dialogs:
+  - `camoufox-browser --session <s> frame "#my-iframe"`
+  - `camoufox-browser --session <s> frame main`
+  - `camoufox-browser --session <s> dialog accept "prompt text"`
+  - `camoufox-browser --session <s> dialog dismiss`
+- Debug helpers:
+  - `camoufox-browser --session <s> console`
+  - `camoufox-browser --session <s> console --clear`
+  - `camoufox-browser --session <s> errors`
+  - `camoufox-browser --session <s> highlight @e1`
+- Cookies + storage:
+  - `camoufox-browser --session <s> cookies`
+  - `camoufox-browser --session <s> cookies set sid abc --url https://example.com --httpOnly --secure`
+  - `camoufox-browser --session <s> cookies clear`
+  - `camoufox-browser --session <s> storage local set theme dark`
+  - `camoufox-browser --session <s> storage local get theme`
+  - `camoufox-browser --session <s> storage local` (dump all)
+- Keyboard:
+  - `camoufox-browser --session <s> keydown Shift`
+  - `camoufox-browser --session <s> keyboard type "Hello"`
+  - `camoufox-browser --session <s> keyup Shift`
 
 ## Output guidance
 

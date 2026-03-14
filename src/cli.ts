@@ -285,6 +285,129 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
       }
       return { id, action: "tab_list" };
     }
+    case "frame": {
+      const selector = rest[0];
+      if (!selector) throw new Error("Usage: camoufox-browser frame <selector|main>");
+      if (selector === "main") return { id, action: "mainframe" };
+      return { id, action: "frame", selector };
+    }
+    case "dialog": {
+      const sub = rest[0];
+      if (sub !== "accept" && sub !== "dismiss") {
+        throw new Error("Usage: camoufox-browser dialog <accept|dismiss> [text]");
+      }
+      const promptText = rest[1];
+      return { id, action: "dialog", response: sub, ...(promptText ? { promptText } : {}) };
+    }
+    case "console": {
+      const clear = rest.includes("--clear");
+      return { id, action: "console", clear };
+    }
+    case "errors": {
+      const clear = rest.includes("--clear");
+      return { id, action: "errors", clear };
+    }
+    case "highlight": {
+      const selector = rest[0];
+      if (!selector) throw new Error("Usage: camoufox-browser highlight <selector>");
+      return { id, action: "highlight", selector };
+    }
+    case "storage": {
+      const type = rest[0];
+      if (type !== "local" && type !== "session") {
+        throw new Error("Usage: camoufox-browser storage <local|session> [get|set|clear] [key] [value]");
+      }
+
+      const op = rest[1] || "get";
+      if (op === "set") {
+        const key = rest[2];
+        const value = rest[3];
+        if (!key || value === undefined) {
+          throw new Error(`Usage: camoufox-browser storage ${type} set <key> <value>`);
+        }
+        return { id, action: "storage_set", type, key, value };
+      }
+      if (op === "clear") {
+        return { id, action: "storage_clear", type };
+      }
+
+      const key = rest[2];
+      return { id, action: "storage_get", type, ...(key ? { key } : {}) };
+    }
+    case "cookies": {
+      const op = rest[0] || "get";
+      if (op === "set") {
+        const name = rest[1];
+        const value = rest[2];
+        if (!name || value === undefined) {
+          throw new Error(
+            "Usage: camoufox-browser cookies set <name> <value> [--url <url>] [--domain <domain>] [--path <path>] [--httpOnly] [--secure] [--sameSite <Strict|Lax|None>] [--expires <timestamp>]"
+          );
+        }
+
+        const cookie: Record<string, unknown> = { name, value };
+        for (let i = 3; i < rest.length; ) {
+          const a = rest[i];
+          switch (a) {
+            case "--url": {
+              const v = rest[i + 1];
+              if (!v) throw new Error("Usage: camoufox-browser cookies set ... --url <url>");
+              cookie.url = v;
+              i += 2;
+              break;
+            }
+            case "--domain": {
+              const v = rest[i + 1];
+              if (!v) throw new Error("Usage: camoufox-browser cookies set ... --domain <domain>");
+              cookie.domain = v;
+              i += 2;
+              break;
+            }
+            case "--path": {
+              const v = rest[i + 1];
+              if (!v) throw new Error("Usage: camoufox-browser cookies set ... --path <path>");
+              cookie.path = v;
+              i += 2;
+              break;
+            }
+            case "--httpOnly":
+              cookie.httpOnly = true;
+              i += 1;
+              break;
+            case "--secure":
+              cookie.secure = true;
+              i += 1;
+              break;
+            case "--sameSite": {
+              const v = rest[i + 1];
+              if (v !== "Strict" && v !== "Lax" && v !== "None") {
+                throw new Error("Usage: camoufox-browser cookies set ... --sameSite <Strict|Lax|None>");
+              }
+              cookie.sameSite = v;
+              i += 2;
+              break;
+            }
+            case "--expires": {
+              const v = rest[i + 1];
+              const n = v ? Number(v) : NaN;
+              if (!Number.isFinite(n)) throw new Error("Usage: camoufox-browser cookies set ... --expires <timestamp>");
+              cookie.expires = n;
+              i += 2;
+              break;
+            }
+            default:
+              i += 1;
+              break;
+          }
+        }
+
+        return { id, action: "cookies_set", cookies: [cookie] };
+      }
+      if (op === "clear") {
+        return { id, action: "cookies_clear" };
+      }
+      return { id, action: "cookies_get" };
+    }
     case "snapshot": {
       const out: Record<string, unknown> = { id, action: "snapshot" };
       for (let i = 0; i < rest.length; i++) {
@@ -374,6 +497,34 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
       if (!selector) throw new Error("Usage: camoufox-browser click <selector> [--new-tab]");
       return { id, action: "click", selector, ...(newTab ? { newTab: true } : {}) };
     }
+    case "dblclick": {
+      const selector = rest[0];
+      if (!selector) throw new Error("Usage: camoufox-browser dblclick <selector>");
+      return { id, action: "dblclick", selector };
+    }
+    case "focus": {
+      const selector = rest[0];
+      if (!selector) throw new Error("Usage: camoufox-browser focus <selector>");
+      return { id, action: "focus", selector };
+    }
+    case "drag": {
+      const source = rest[0];
+      const target = rest[1];
+      if (!source || !target) throw new Error("Usage: camoufox-browser drag <source> <target>");
+      return { id, action: "drag", source, target };
+    }
+    case "upload": {
+      const selector = rest[0];
+      const files = rest.slice(1);
+      if (!selector || files.length === 0) throw new Error("Usage: camoufox-browser upload <selector> <files...>");
+      return { id, action: "upload", selector, files };
+    }
+    case "download": {
+      const selector = rest[0];
+      const path = rest[1];
+      if (!selector || !path) throw new Error("Usage: camoufox-browser download <selector> <path>");
+      return { id, action: "download", selector, path };
+    }
     case "fill": {
       const selector = rest[0];
       if (!selector) throw new Error("Usage: camoufox-browser fill <selector> <text>");
@@ -412,6 +563,30 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
       if (rest.length === 0) throw new Error("Usage: camoufox-browser press <key>");
       if (rest.length >= 2) return { id, action: "press", selector: rest[0], key: rest[1] };
       return { id, action: "press", key: rest[0] };
+    }
+    case "keydown": {
+      const key = rest[0];
+      if (!key) throw new Error("Usage: camoufox-browser keydown <key>");
+      return { id, action: "keydown", key };
+    }
+    case "keyup": {
+      const key = rest[0];
+      if (!key) throw new Error("Usage: camoufox-browser keyup <key>");
+      return { id, action: "keyup", key };
+    }
+    case "keyboard": {
+      const sub = rest[0];
+      if (sub !== "type" && sub !== "inserttext" && sub !== "insertText") {
+        throw new Error("Usage: camoufox-browser keyboard <type|inserttext> <text>");
+      }
+      const text = rest.slice(1).join(" ");
+      if (!text.trim()) throw new Error(`Usage: camoufox-browser keyboard ${sub} <text>`);
+      return {
+        id,
+        action: "keyboard",
+        subaction: sub === "type" ? "type" : "insertText",
+        text
+      };
     }
     case "get": {
       const sub = rest[0];
@@ -615,6 +790,30 @@ function printResponse(resp: any): number {
   const data = resp.data;
   if (!data || typeof data !== "object") return 0;
 
+  if (Array.isArray((data as any).messages)) {
+    const messages = (data as any).messages as any[];
+    for (const msg of messages) {
+      const level = typeof msg?.type === "string" ? msg.type : "log";
+      const text = typeof msg?.text === "string" ? msg.text : "";
+      process.stdout.write(`[${level}] ${text}\n`);
+    }
+    return 0;
+  }
+
+  if (Array.isArray((data as any).errors)) {
+    const errors = (data as any).errors as any[];
+    for (const err of errors) {
+      const message = typeof err?.message === "string" ? err.message : "";
+      if (message) process.stdout.write(`${message}\n`);
+    }
+    return 0;
+  }
+
+  if ((data as any).cleared === true) {
+    process.stdout.write("Cleared\n");
+    return 0;
+  }
+
   if (typeof data.url === "string") {
     if (typeof data.title === "string") {
       process.stdout.write(`${data.title}\n  ${data.url}\n`);
@@ -640,6 +839,22 @@ function printResponse(resp: any): number {
       const marker = active ? "->" : "  ";
       process.stdout.write(`${marker} [${index}] ${title} - ${url}\n`);
     }
+    return 0;
+  }
+
+  if (Array.isArray((data as any).cookies)) {
+    const cookies = (data as any).cookies as any[];
+    for (const c of cookies) {
+      const name = typeof c?.name === "string" ? c.name : "";
+      const value = typeof c?.value === "string" ? c.value : "";
+      if (name) process.stdout.write(`${name}=${value}\n`);
+    }
+    return 0;
+  }
+
+  if ((data as any).data && typeof (data as any).data === "object") {
+    const formatted = JSON.stringify((data as any).data, null, 2);
+    process.stdout.write(`${formatted}\n`);
     return 0;
   }
 

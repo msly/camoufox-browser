@@ -6,7 +6,7 @@
  * - Subsequent actions can target `@e1` deterministically.
  */
 
-import type { Locator, Page } from "playwright-core";
+import type { Frame, Locator, Page } from "playwright-core";
 
 export interface RefMap {
   [ref: string]: {
@@ -100,7 +100,7 @@ function buildSelector(role: string, name: string): string {
 }
 
 async function findCursorInteractiveElements(
-  page: Page,
+  page: Page | Frame,
   selector?: string
 ): Promise<
   Array<{
@@ -212,7 +212,7 @@ async function findCursorInteractiveElements(
 }
 
 export async function getEnhancedSnapshot(
-  page: Page,
+  page: Page | Frame,
   options: SnapshotOptions = {}
 ): Promise<EnhancedSnapshot> {
   resetRefs();
@@ -476,4 +476,3 @@ export function parseRef(arg: string): string | null {
   if (/^e\\d+$/.test(arg)) return arg;
   return null;
 }
-
