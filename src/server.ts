@@ -263,9 +263,16 @@ export class DaemonServer {
         cmd.action === "back" ||
         cmd.action === "forward" ||
         cmd.action === "reload" ||
+        cmd.action === "tab_new" ||
+        cmd.action === "tab_list" ||
+        cmd.action === "tab_switch" ||
+        cmd.action === "tab_close" ||
         cmd.action === "url" ||
         cmd.action === "title" ||
         cmd.action === "snapshot" ||
+        cmd.action === "evaluate" ||
+        cmd.action === "scroll" ||
+        cmd.action === "scrollintoview" ||
         cmd.action === "click" ||
         cmd.action === "fill" ||
         cmd.action === "type" ||
@@ -275,14 +282,52 @@ export class DaemonServer {
         cmd.action === "uncheck" ||
         cmd.action === "select" ||
         cmd.action === "gettext" ||
+        cmd.action === "innerhtml" ||
+        cmd.action === "inputvalue" ||
+        cmd.action === "getattribute" ||
+        cmd.action === "count" ||
+        cmd.action === "boundingbox" ||
+        cmd.action === "styles" ||
+        cmd.action === "isvisible" ||
+        cmd.action === "isenabled" ||
+        cmd.action === "ischecked" ||
         cmd.action === "wait" ||
         cmd.action === "waitforurl" ||
         cmd.action === "waitforloadstate" ||
         cmd.action === "screenshot";
 
+      const desiredHeadless =
+        typeof (cmd as any).headless === "boolean" ? ((cmd as any).headless as boolean) : undefined;
+
       // Auto-launch on the first browser-dependent command for drop-in ergonomics.
       if (needsBrowser && !this.browser.isLaunched() && cmd.action !== "launch") {
-        await this.browser.launch(getLaunchConfigFromEnv());
+        const cfgFromEnv = getLaunchConfigFromEnv();
+        await this.browser.launch(
+          desiredHeadless === undefined ? cfgFromEnv : { ...cfgFromEnv, headless: desiredHeadless }
+        );
+      }
+
+      // If caller explicitly requests headless/headed, enforce it.
+      // When a browser is already running with a different mode, we either:
+      // - relaunch automatically for navigate/launch (since navigation will happen anyway), or
+      // - return an actionable error for other commands to avoid surprising state loss.
+      if (needsBrowser && desiredHeadless !== undefined && this.browser.isLaunched()) {
+        const current = this.browser.getLaunchConfig();
+        if (current && current.headless !== desiredHeadless) {
+          if (cmd.action === "navigate" || cmd.action === "launch") {
+            const relaunchCfg: LaunchConfig = { ...current, headless: desiredHeadless };
+            await this.browser.close();
+            await this.browser.launch(relaunchCfg);
+          } else {
+            if (envIsTruthy("CAMOUFOX_BROWSER_DEBUG") || envIsTruthy("AGENT_BROWSER_DEBUG")) {
+              const currentMode = current.headless ? "headless" : "headed";
+              const desiredMode = desiredHeadless ? "headless" : "headed";
+              process.stderr.write(
+                `[camoufox-browser] requested ${desiredMode} but session is already ${currentMode}; keeping existing browser. (Hint: run 'camoufox-browser close --session ${this.session}' to restart.)\n`
+              );
+            }
+          }
+        }
       }
 
       // Recover from stale state (launched but no pages).
@@ -292,7 +337,9 @@ export class DaemonServer {
 
       switch (cmd.action) {
         case "launch": {
-          const cfg = coerceLaunchConfig(cmd) ?? getLaunchConfigFromEnv();
+          const cfgFromEnv = getLaunchConfigFromEnv();
+          const override = coerceLaunchConfig(cmd);
+          const cfg = override ? { ...cfgFromEnv, headless: override.headless } : cfgFromEnv;
           await this.browser.launch(cfg);
           return successResponse(cmd.id, { launched: true });
         }
@@ -322,6 +369,33 @@ export class DaemonServer {
           const page = this.browser.getPage();
           await page.reload();
           return successResponse(cmd.id, { url: page.url() });
+        }
+        case "tab_new": {
+          const result = await this.browser.newTabManaged();
+
+          if (typeof cmd.url === "string" && cmd.url.length > 0) {
+            const page = this.browser.getPage();
+            await page.goto(cmd.url, { waitUntil: "domcontentloaded" });
+          }
+
+          return successResponse(cmd.id, result);
+        }
+        case "tab_list": {
+          const tabs = await this.browser.listTabs();
+          return successResponse(cmd.id, { tabs, active: this.browser.getActiveIndex() });
+        }
+        case "tab_switch": {
+          const index = typeof (cmd as any).index === "number" ? ((cmd as any).index as number) : NaN;
+          if (!Number.isFinite(index)) return errorResponse(cmd.id, "Missing index");
+          const result = await this.browser.switchTo(index);
+          const page = this.browser.getPage();
+          return successResponse(cmd.id, { ...result, title: await page.title().catch(() => "") });
+        }
+        case "tab_close": {
+          const rawIndex = (cmd as any).index;
+          const index = typeof rawIndex === "number" ? (rawIndex as number) : undefined;
+          const result = await this.browser.closeTab(index);
+          return successResponse(cmd.id, result);
         }
         case "url": {
           const page = this.browser.getPage();
@@ -356,6 +430,60 @@ export class DaemonServer {
             refs: Object.keys(simpleRefs).length > 0 ? simpleRefs : undefined,
             origin: page.url()
           });
+        }
+        case "evaluate": {
+          const page = this.browser.getPage();
+          const script = typeof (cmd as any).script === "string" ? ((cmd as any).script as string) : "";
+          if (!script) return errorResponse(cmd.id, "Missing script");
+          const result = await page.evaluate(script);
+          return successResponse(cmd.id, { result, origin: page.url() });
+        }
+        case "scroll": {
+          const page = this.browser.getPage();
+          const direction = typeof (cmd as any).direction === "string" ? ((cmd as any).direction as string) : "down";
+          const amount = typeof (cmd as any).amount === "number" ? ((cmd as any).amount as number) : 300;
+          const selector = typeof (cmd as any).selector === "string" ? ((cmd as any).selector as string) : undefined;
+
+          let deltaX = 0;
+          let deltaY = 0;
+          switch (direction) {
+            case "up":
+              deltaY = -amount;
+              break;
+            case "down":
+              deltaY = amount;
+              break;
+            case "left":
+              deltaX = -amount;
+              break;
+            case "right":
+              deltaX = amount;
+              break;
+            default:
+              deltaY = amount;
+              break;
+          }
+
+          if (selector) {
+            const element = this.browser.getLocator(selector);
+            await element.scrollIntoViewIfNeeded();
+            await element.evaluate(
+              (el, { x, y }) => {
+                (el as any).scrollBy(x, y);
+              },
+              { x: deltaX, y: deltaY }
+            );
+          } else {
+            await page.evaluate(`window.scrollBy(${deltaX}, ${deltaY})`);
+          }
+
+          return successResponse(cmd.id, { scrolled: true });
+        }
+        case "scrollintoview": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          await this.browser.getLocator(selector).scrollIntoViewIfNeeded();
+          return successResponse(cmd.id, { scrolled: true });
         }
         case "click": {
           const selector = typeof cmd.selector === "string" ? cmd.selector : "";
@@ -447,6 +575,111 @@ export class DaemonServer {
           const inner = await locator.innerText();
           const text = inner || (await locator.textContent()) || "";
           return successResponse(cmd.id, { text, origin: page.url() });
+        }
+        case "innerhtml": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const page = this.browser.getPage();
+          const html = await this.browser.getLocator(selector).innerHTML();
+          return successResponse(cmd.id, { html, origin: page.url() });
+        }
+        case "inputvalue": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const page = this.browser.getPage();
+          const value = await this.browser.getLocator(selector).inputValue();
+          return successResponse(cmd.id, { value, origin: page.url() });
+        }
+        case "getattribute": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const attribute =
+            typeof (cmd as any).attribute === "string" ? ((cmd as any).attribute as string) : "";
+          if (!attribute) return errorResponse(cmd.id, "Missing attribute");
+          const page = this.browser.getPage();
+          const value = await this.browser.getLocator(selector).getAttribute(attribute);
+          return successResponse(cmd.id, { attribute, value, origin: page.url() });
+        }
+        case "count": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const count = await this.browser.getLocator(selector).count();
+          return successResponse(cmd.id, { count });
+        }
+        case "boundingbox": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const box = await this.browser.getLocator(selector).boundingBox();
+          return successResponse(cmd.id, { box });
+        }
+        case "styles": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const page = this.browser.getPage();
+
+          const extractStylesScript = `(function(el) {
+            const s = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return {
+              tag: el.tagName.toLowerCase(),
+              text: (el.innerText || '').trim().slice(0, 80) || null,
+              box: {
+                x: Math.round(r.x),
+                y: Math.round(r.y),
+                width: Math.round(r.width),
+                height: Math.round(r.height),
+              },
+              styles: {
+                fontSize: s.fontSize,
+                fontWeight: s.fontWeight,
+                fontFamily: (s.fontFamily || '').split(',')[0].trim().replace(/\"/g, ''),
+                color: s.color,
+                backgroundColor: s.backgroundColor,
+                borderRadius: s.borderRadius,
+                border: s.border !== 'none' && s.borderWidth !== '0px' ? s.border : null,
+                boxShadow: s.boxShadow !== 'none' ? s.boxShadow : null,
+                padding: s.padding,
+              },
+            };
+          })`;
+
+          const refLocator = this.browser.getLocatorFromRef(selector);
+          if (refLocator) {
+            const element = await refLocator.evaluate((el, script) => {
+              const fn = eval(script as string);
+              return fn(el);
+            }, extractStylesScript);
+            return successResponse(cmd.id, { elements: [element] });
+          }
+
+          const elements = await page.$$eval(
+            selector,
+            (els, script) => {
+              const fn = eval(script as string);
+              return (els as any[]).map((el) => fn(el));
+            },
+            extractStylesScript
+          );
+
+          return successResponse(cmd.id, { elements });
+        }
+        case "isvisible": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const visible = await this.browser.getLocator(selector).isVisible();
+          return successResponse(cmd.id, { visible });
+        }
+        case "isenabled": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const enabled = await this.browser.getLocator(selector).isEnabled();
+          return successResponse(cmd.id, { enabled });
+        }
+        case "ischecked": {
+          const selector = typeof cmd.selector === "string" ? cmd.selector : "";
+          if (!selector) return errorResponse(cmd.id, "Missing selector");
+          const checked = await this.browser.getLocator(selector).isChecked();
+          return successResponse(cmd.id, { checked });
         }
         case "wait": {
           const page = this.browser.getPage();

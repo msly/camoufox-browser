@@ -157,6 +157,19 @@ function genId(): string {
   return `r${Math.floor(Date.now() % 1_000_000)}${Math.floor(Math.random() * 1000)}`;
 }
 
+async function readAllStdin(): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    let buf = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      buf += String(chunk);
+    });
+    process.stdin.on("end", () => resolve(buf));
+    process.stdin.on("error", reject);
+    process.stdin.resume();
+  });
+}
+
 function parseFlags(argv: string[]): { flags: Flags; args: string[] } {
   const flags: Flags = { json: false, headed: false, debug: false };
   const args: string[] = [];
@@ -251,6 +264,27 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
     case "forward":
     case "reload":
       return { id, action: cmd };
+    case "tab": {
+      const sub = rest[0];
+      if (sub === "new") {
+        const out: Record<string, unknown> = { id, action: "tab_new" };
+        if (rest[1]) out.url = rest[1];
+        return out;
+      }
+      if (sub === "list") return { id, action: "tab_list" };
+      if (sub === "close") {
+        const index = rest[1] ? Number(rest[1]) : undefined;
+        return {
+          id,
+          action: "tab_close",
+          ...(Number.isFinite(index) ? { index } : {})
+        };
+      }
+      if (sub && Number.isFinite(Number(sub))) {
+        return { id, action: "tab_switch", index: Number(sub) };
+      }
+      return { id, action: "tab_list" };
+    }
     case "snapshot": {
       const out: Record<string, unknown> = { id, action: "snapshot" };
       for (let i = 0; i < rest.length; i++) {
@@ -285,6 +319,54 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
         }
       }
       return out;
+    }
+    case "eval": {
+      const first = rest[0];
+      const isBase64 = first === "-b" || first === "--base64";
+      const isStdin = first === "--stdin";
+
+      if (isStdin) {
+        return { id, action: "evaluate", stdin: true };
+      }
+
+      const scriptRaw = (isBase64 ? rest.slice(1) : rest).join(" ");
+      if (!scriptRaw.trim()) throw new Error("Usage: camoufox-browser eval [options] <script>");
+
+      const script = isBase64 ? Buffer.from(scriptRaw, "base64").toString("utf8") : scriptRaw;
+      return { id, action: "evaluate", script };
+    }
+    case "scroll": {
+      const out: Record<string, unknown> = { id, action: "scroll" };
+      let positionalIndex = 0;
+
+      for (let i = 0; i < rest.length; i++) {
+        const a = rest[i];
+        if (a === "-s" || a === "--selector") {
+          const sel = rest[i + 1];
+          if (!sel) throw new Error("Usage: camoufox-browser scroll [direction] [amount] [--selector <sel>]");
+          out.selector = sel;
+          i++;
+          continue;
+        }
+        if (a.startsWith("-")) continue;
+
+        if (positionalIndex === 0) out.direction = a;
+        if (positionalIndex === 1) {
+          const n = Number(a);
+          if (Number.isFinite(n)) out.amount = n;
+        }
+        positionalIndex++;
+      }
+
+      if (typeof out.direction !== "string") out.direction = "down";
+      if (typeof out.amount !== "number") out.amount = 300;
+      return out;
+    }
+    case "scrollintoview":
+    case "scrollinto": {
+      const selector = rest[0];
+      if (!selector) throw new Error("Usage: camoufox-browser scrollintoview <selector>");
+      return { id, action: "scrollintoview", selector };
     }
     case "click": {
       const newTab = rest.includes("--new-tab");
@@ -333,7 +415,7 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
     }
     case "get": {
       const sub = rest[0];
-      if (!sub) throw new Error("Usage: camoufox-browser get <url|title|text> [args...]");
+      if (!sub) throw new Error("Usage: camoufox-browser get <text|html|value|attr|url|title|count|box|styles> [args...]");
       if (sub === "url") return { id, action: "url" };
       if (sub === "title") return { id, action: "title" };
       if (sub === "text") {
@@ -341,7 +423,48 @@ function buildCommand(args: string[], flags: Flags): Record<string, unknown> {
         if (!selector) throw new Error("Usage: camoufox-browser get text <selector>");
         return { id, action: "gettext", selector };
       }
+      if (sub === "html") {
+        const selector = rest[1];
+        if (!selector) throw new Error("Usage: camoufox-browser get html <selector>");
+        return { id, action: "innerhtml", selector };
+      }
+      if (sub === "value") {
+        const selector = rest[1];
+        if (!selector) throw new Error("Usage: camoufox-browser get value <selector>");
+        return { id, action: "inputvalue", selector };
+      }
+      if (sub === "attr") {
+        const selector = rest[1];
+        const attribute = rest[2];
+        if (!selector || !attribute) throw new Error("Usage: camoufox-browser get attr <selector> <attribute>");
+        return { id, action: "getattribute", selector, attribute };
+      }
+      if (sub === "count") {
+        const selector = rest[1];
+        if (!selector) throw new Error("Usage: camoufox-browser get count <selector>");
+        return { id, action: "count", selector };
+      }
+      if (sub === "box") {
+        const selector = rest[1];
+        if (!selector) throw new Error("Usage: camoufox-browser get box <selector>");
+        return { id, action: "boundingbox", selector };
+      }
+      if (sub === "styles") {
+        const selector = rest[1];
+        if (!selector) throw new Error("Usage: camoufox-browser get styles <selector>");
+        return { id, action: "styles", selector };
+      }
       throw new Error(`Unknown get subcommand: ${sub}`);
+    }
+    case "is": {
+      const sub = rest[0];
+      if (!sub) throw new Error("Usage: camoufox-browser is <visible|enabled|checked> <selector>");
+      const selector = rest[1];
+      if (!selector) throw new Error(`Usage: camoufox-browser is ${sub} <selector>`);
+      if (sub === "visible") return { id, action: "isvisible", selector };
+      if (sub === "enabled") return { id, action: "isenabled", selector };
+      if (sub === "checked") return { id, action: "ischecked", selector };
+      throw new Error(`Unknown is subcommand: ${sub}`);
     }
     case "wait": {
       const u = rest.indexOf("--url");
@@ -506,8 +629,68 @@ function printResponse(resp: any): number {
     return 0;
   }
 
+  if (Array.isArray((data as any).tabs)) {
+    const tabs = (data as any).tabs as any[];
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i] || {};
+      const index = typeof tab.index === "number" ? tab.index : i;
+      const title = typeof tab.title === "string" && tab.title.length > 0 ? tab.title : "Untitled";
+      const url = typeof tab.url === "string" ? tab.url : "";
+      const active = tab.active === true;
+      const marker = active ? "->" : "  ";
+      process.stdout.write(`${marker} [${index}] ${title} - ${url}\n`);
+    }
+    return 0;
+  }
+
   if (typeof data.text === "string") {
     process.stdout.write(`${data.text}\n`);
+    return 0;
+  }
+
+  if (typeof (data as any).html === "string") {
+    process.stdout.write(`${(data as any).html}\n`);
+    return 0;
+  }
+
+  if (typeof (data as any).value === "string") {
+    process.stdout.write(`${(data as any).value}\n`);
+    return 0;
+  }
+
+  if (typeof (data as any).count === "number") {
+    process.stdout.write(`${(data as any).count}\n`);
+    return 0;
+  }
+
+  if (typeof (data as any).visible === "boolean") {
+    process.stdout.write(`${(data as any).visible}\n`);
+    return 0;
+  }
+  if (typeof (data as any).enabled === "boolean") {
+    process.stdout.write(`${(data as any).enabled}\n`);
+    return 0;
+  }
+  if (typeof (data as any).checked === "boolean") {
+    process.stdout.write(`${(data as any).checked}\n`);
+    return 0;
+  }
+
+  if ("result" in (data as any)) {
+    const formatted = JSON.stringify((data as any).result, null, 2);
+    process.stdout.write(`${formatted}\n`);
+    return 0;
+  }
+
+  if ("box" in (data as any)) {
+    const formatted = JSON.stringify((data as any).box, null, 2);
+    process.stdout.write(`${formatted}\n`);
+    return 0;
+  }
+
+  if (Array.isArray((data as any).elements)) {
+    const formatted = JSON.stringify((data as any).elements, null, 2);
+    process.stdout.write(`${formatted}\n`);
     return 0;
   }
 
@@ -518,6 +701,11 @@ function printResponse(resp: any): number {
 
   if (typeof data.path === "string") {
     process.stdout.write(`${data.path}\n`);
+    return 0;
+  }
+
+  if (typeof (data as any).closed === "number" && typeof (data as any).remaining === "number") {
+    process.stdout.write("Tab closed\n");
     return 0;
   }
 
@@ -585,6 +773,11 @@ async function main(): Promise<number> {
   await ensureDaemonRunning(session);
 
   const command = buildCommand(args, flags);
+  if ((command as any).action === "evaluate" && (command as any).stdin === true) {
+    (command as any).script = await readAllStdin();
+    delete (command as any).stdin;
+  }
+  if (flags.headed) (command as any).headless = false;
   const resp = await sendCommand(session, command);
 
   if (flags.json) {

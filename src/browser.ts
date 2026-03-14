@@ -22,8 +22,10 @@ function expandTilde(p: string): string {
 export class BrowserManager {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
-  private page: Page | null = null;
+  private pages: Page[] = [];
+  private activePageIndex = 0;
   private isPersistentContext = false;
+  private launchConfig: LaunchConfig | null = null;
 
   private refMap: RefMap = {};
   private lastSnapshot = "";
@@ -33,20 +35,26 @@ export class BrowserManager {
   }
 
   hasPages(): boolean {
-    return this.page !== null;
+    return this.pages.length > 0;
   }
 
   async ensurePage(): Promise<void> {
-    if (this.page) return;
     if (!this.context) throw new Error("Browser not launched. Call open first.");
-    this.page = this.context.pages()[0] || (await this.context.newPage());
+    if (this.pages.length > 0) return;
+
+    const page = this.context.pages()[0] || (await this.context.newPage());
+    this.trackPage(page);
+    this.activePageIndex = this.pages.indexOf(page);
+    if (this.activePageIndex < 0) this.activePageIndex = 0;
+    await page.bringToFront().catch(() => {});
   }
 
   getPage(): Page {
-    if (!this.page) {
+    const page = this.pages[this.activePageIndex] || this.pages[0];
+    if (!page) {
       throw new Error("Browser not launched. Call open first.");
     }
-    return this.page;
+    return page;
   }
 
   getContext(): BrowserContext {
@@ -54,6 +62,10 @@ export class BrowserManager {
       throw new Error("Browser not launched. Call open first.");
     }
     return this.context;
+  }
+
+  getActiveIndex(): number {
+    return this.activePageIndex;
   }
 
   getLastSnapshot(): string {
@@ -64,8 +76,43 @@ export class BrowserManager {
     return this.refMap;
   }
 
+  getLaunchConfig(): LaunchConfig | null {
+    return this.launchConfig;
+  }
+
+  private trackPage(page: Page): void {
+    if (this.pages.includes(page)) return;
+    this.pages.push(page);
+
+    page.on("close", () => {
+      const idx = this.pages.indexOf(page);
+      if (idx < 0) return;
+      this.pages.splice(idx, 1);
+      if (this.pages.length === 0) {
+        this.activePageIndex = 0;
+        return;
+      }
+      if (this.activePageIndex >= this.pages.length) {
+        this.activePageIndex = this.pages.length - 1;
+      } else if (this.activePageIndex > idx) {
+        this.activePageIndex--;
+      }
+    });
+  }
+
+  private setupContextTracking(context: BrowserContext): void {
+    context.on("page", (page) => {
+      this.trackPage(page);
+      const idx = this.pages.indexOf(page);
+      if (idx >= 0 && idx !== this.activePageIndex) {
+        this.activePageIndex = idx;
+      }
+    });
+  }
+
   async launch(config: LaunchConfig): Promise<void> {
     if (this.isLaunched()) return;
+    this.launchConfig = config;
 
     let Camoufox: typeof import("camoufox-js")["Camoufox"];
     try {
@@ -106,7 +153,17 @@ export class BrowserManager {
 
       this.context = ctx;
       this.isPersistentContext = true;
-      this.page = ctx.pages()[0] || (await ctx.newPage());
+      this.setupContextTracking(ctx);
+      const initial = ctx.pages();
+      if (initial.length > 0) {
+        for (const p of initial) this.trackPage(p);
+        this.activePageIndex = 0;
+      } else {
+        const p = await ctx.newPage();
+        this.trackPage(p);
+        this.activePageIndex = this.pages.indexOf(p);
+      }
+      await this.getPage().bringToFront().catch(() => {});
       return;
     }
 
@@ -124,7 +181,17 @@ export class BrowserManager {
       ...(config.storageState ? { storageState: config.storageState } : {}),
       ...(config.ignoreHTTPSErrors ? { ignoreHTTPSErrors: true } : {})
     });
-    this.page = this.context.pages()[0] || (await this.context.newPage());
+    this.setupContextTracking(this.context);
+    const initial = this.context.pages();
+    if (initial.length > 0) {
+      for (const p of initial) this.trackPage(p);
+      this.activePageIndex = 0;
+    } else {
+      const p = await this.context.newPage();
+      this.trackPage(p);
+      this.activePageIndex = this.pages.indexOf(p);
+    }
+    await this.getPage().bringToFront().catch(() => {});
   }
 
   async navigate(
@@ -143,9 +210,64 @@ export class BrowserManager {
   async newTab(): Promise<Page> {
     const ctx = this.getContext();
     const page = await ctx.newPage();
-    this.page = page;
+    this.trackPage(page);
+    this.activePageIndex = this.pages.indexOf(page);
+    if (this.activePageIndex < 0) this.activePageIndex = Math.max(0, this.pages.length - 1);
     await page.bringToFront().catch(() => {});
     return page;
+  }
+
+  async newTabManaged(): Promise<{ index: number; total: number }> {
+    await this.newTab();
+    return { index: this.activePageIndex, total: this.pages.length };
+  }
+
+  async switchTo(index: number): Promise<{ index: number; url: string; title: string }> {
+    if (index < 0 || index >= this.pages.length) {
+      throw new Error(`Invalid tab index: ${index}. Available: 0-${Math.max(0, this.pages.length - 1)}`);
+    }
+    this.activePageIndex = index;
+    const page = this.getPage();
+    await page.bringToFront().catch(() => {});
+    return { index: this.activePageIndex, url: page.url(), title: "" };
+  }
+
+  async closeTab(index?: number): Promise<{ closed: number; remaining: number }> {
+    const targetIndex = index ?? this.activePageIndex;
+    if (targetIndex < 0 || targetIndex >= this.pages.length) {
+      throw new Error(`Invalid tab index: ${targetIndex}`);
+    }
+    if (this.pages.length === 1) {
+      throw new Error('Cannot close the last tab. Use "close" to close the browser.');
+    }
+
+    const page = this.pages[targetIndex];
+    await page.close();
+    const idx = this.pages.indexOf(page);
+    if (idx >= 0) {
+      this.pages.splice(idx, 1);
+    }
+
+    if (this.activePageIndex >= this.pages.length) {
+      this.activePageIndex = this.pages.length - 1;
+    } else if (this.activePageIndex > targetIndex) {
+      this.activePageIndex--;
+    }
+
+    await this.getPage().bringToFront().catch(() => {});
+
+    return { closed: targetIndex, remaining: this.pages.length };
+  }
+
+  async listTabs(): Promise<Array<{ index: number; url: string; title: string; active: boolean }>> {
+    return await Promise.all(
+      this.pages.map(async (page, index) => ({
+        index,
+        url: page.url(),
+        title: await page.title().catch(() => ""),
+        active: index === this.activePageIndex
+      }))
+    );
   }
 
   async getSnapshot(options?: SnapshotOptions): Promise<EnhancedSnapshot> {
@@ -193,8 +315,10 @@ export class BrowserManager {
 
     this.browser = null;
     this.context = null;
-    this.page = null;
+    this.pages = [];
+    this.activePageIndex = 0;
     this.isPersistentContext = false;
+    this.launchConfig = null;
     this.refMap = {};
     this.lastSnapshot = "";
 

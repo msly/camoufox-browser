@@ -65,12 +65,20 @@ Environment variables:
 - `--user-agent <ua>`
 - `--args "<comma-or-newline-separated args>"`
 
-## Command reference (v0.1 core)
+Notes:
+
+- `--headed` is applied at browser launch time. If a session already has a running headless browser, `open|goto|navigate` with `--headed` will relaunch the browser to apply headed mode (this may close existing tabs/pages for that session).
+
+## Command reference (v0.1 core + high-frequency)
 
 - Navigation: `open|goto|navigate`, `back`, `forward`, `reload`, `close`
+- Tabs: `tab [new [url]|list|close [n]|<n>]`
 - Snapshot: `snapshot [-i] [-c] [-C] [--depth N] [--selector <css>]`
+- Eval: `eval [-b|--base64] [--stdin] <script>`
 - Interact: `click`, `fill`, `type`, `press`, `hover`, `check`, `uncheck`, `select`
-- Get: `get url|title|text`
+- Scroll: `scroll [direction] [amount] [--selector <css>]`, `scrollintoview <selector>`
+- Get: `get url|title|text|html|value|attr|count|box|styles`
+- Is: `is visible|enabled|checked <selector>`
 - Wait: `wait <ms|selector|@ref>` or `wait --url <pattern>` / `wait --load <state>` / `wait --text <text>`
 - Screenshot: `screenshot [selector|@ref] [path]` (also supports `--full-page`, `--format`, `--quality`)
 

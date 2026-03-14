@@ -1,4 +1,7 @@
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde_json::{json, Value};
+use std::io::{self, BufRead};
 
 use crate::flags::Flags;
 
@@ -44,7 +47,7 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
     let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
     let id = gen_id();
 
-    match cmd {
+    let mut parsed = match cmd {
         "install" => {
             let with_deps = rest.contains(&"--with-deps");
             Ok(json!({ "id": id, "action": "install", "withDeps": with_deps }))
@@ -81,6 +84,30 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         "forward" => Ok(json!({ "id": id, "action": "forward" })),
         "reload" => Ok(json!({ "id": id, "action": "reload" })),
 
+        // === Tabs ===
+        "tab" => match rest.first().copied() {
+            Some("new") => {
+                let mut cmd = json!({ "id": id, "action": "tab_new" });
+                if let Some(url) = rest.get(1) {
+                    cmd["url"] = json!(url);
+                }
+                Ok(cmd)
+            }
+            Some("list") => Ok(json!({ "id": id, "action": "tab_list" })),
+            Some("close") => {
+                let mut cmd = json!({ "id": id, "action": "tab_close" });
+                if let Some(index) = rest.get(1).and_then(|s| s.parse::<i32>().ok()) {
+                    cmd["index"] = json!(index);
+                }
+                Ok(cmd)
+            }
+            Some(n) if n.parse::<i32>().is_ok() => {
+                let index = n.parse::<i32>().expect("already checked parse succeeds");
+                Ok(json!({ "id": id, "action": "tab_switch", "index": index }))
+            }
+            _ => Ok(json!({ "id": id, "action": "tab_list" })),
+        },
+
         "snapshot" => {
             let mut cmd = json!({ "id": id, "action": "snapshot" });
             let obj = cmd.as_object_mut().unwrap();
@@ -115,6 +142,104 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 i += 1;
             }
             Ok(cmd)
+        }
+
+        // === Eval ===
+        "eval" => {
+            // Flags: -b/--base64 or --stdin
+            let (is_base64, is_stdin, script_parts): (bool, bool, &[&str]) =
+                if rest.first() == Some(&"-b") || rest.first() == Some(&"--base64") {
+                    (true, false, &rest[1..])
+                } else if rest.first() == Some(&"--stdin") {
+                    (false, true, &rest[1..])
+                } else {
+                    (false, false, rest.as_slice())
+                };
+
+            let script = if is_stdin {
+                let stdin = io::stdin();
+                let lines: Vec<String> = stdin
+                    .lock()
+                    .lines()
+                    .map(|l| l.unwrap_or_default())
+                    .collect();
+                lines.join("\n")
+            } else {
+                let raw_script = script_parts.join(" ");
+                if raw_script.trim().is_empty() {
+                    return Err(ParseError::MissingArguments {
+                        context: "eval".to_string(),
+                        usage: "eval [options] <script>",
+                    });
+                }
+                if is_base64 {
+                    let decoded = STANDARD.decode(&raw_script).map_err(|_| ParseError::InvalidValue {
+                        message: "Invalid base64 encoding".to_string(),
+                        usage: "eval -b <base64-encoded-script>",
+                    })?;
+                    String::from_utf8(decoded).map_err(|_| ParseError::InvalidValue {
+                        message: "Base64 decoded to invalid UTF-8".to_string(),
+                        usage: "eval -b <base64-encoded-script>",
+                    })?
+                } else {
+                    raw_script
+                }
+            };
+
+            Ok(json!({ "id": id, "action": "evaluate", "script": script }))
+        }
+
+        // === Scroll ===
+        "scroll" => {
+            let mut cmd = json!({ "id": id, "action": "scroll" });
+            let obj = cmd.as_object_mut().unwrap();
+            let mut positional_index = 0;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "-s" | "--selector" => {
+                        if let Some(s) = rest.get(i + 1) {
+                            obj.insert("selector".to_string(), json!(s));
+                            i += 1;
+                        } else {
+                            return Err(ParseError::MissingArguments {
+                                context: "scroll --selector".to_string(),
+                                usage: "scroll [direction] [amount] [--selector <sel>]",
+                            });
+                        }
+                    }
+                    arg if arg.starts_with('-') => {}
+                    _ => {
+                        match positional_index {
+                            0 => {
+                                obj.insert("direction".to_string(), json!(rest[i]));
+                            }
+                            1 => {
+                                if let Ok(n) = rest[i].parse::<i32>() {
+                                    obj.insert("amount".to_string(), json!(n));
+                                }
+                            }
+                            _ => {}
+                        }
+                        positional_index += 1;
+                    }
+                }
+                i += 1;
+            }
+            if !obj.contains_key("direction") {
+                obj.insert("direction".to_string(), json!("down"));
+            }
+            if !obj.contains_key("amount") {
+                obj.insert("amount".to_string(), json!(300));
+            }
+            Ok(cmd)
+        }
+        "scrollintoview" | "scrollinto" => {
+            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
+                context: "scrollintoview".to_string(),
+                usage: "scrollintoview <selector>",
+            })?;
+            Ok(json!({ "id": id, "action": "scrollintoview", "selector": sel }))
         }
 
         "click" => {
@@ -207,13 +332,92 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 })?;
                 Ok(json!({ "id": id, "action": "gettext", "selector": sel }))
             }
+            Some("html") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get html".to_string(),
+                    usage: "get html <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "innerhtml", "selector": sel }))
+            }
+            Some("value") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get value".to_string(),
+                    usage: "get value <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "inputvalue", "selector": sel }))
+            }
+            Some("attr") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get attr".to_string(),
+                    usage: "get attr <selector> <attribute>",
+                })?;
+                let attr = rest.get(2).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get attr".to_string(),
+                    usage: "get attr <selector> <attribute>",
+                })?;
+                Ok(json!({ "id": id, "action": "getattribute", "selector": sel, "attribute": attr }))
+            }
+            Some("count") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get count".to_string(),
+                    usage: "get count <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "count", "selector": sel }))
+            }
+            Some("box") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get box".to_string(),
+                    usage: "get box <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "boundingbox", "selector": sel }))
+            }
+            Some("styles") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "get styles".to_string(),
+                    usage: "get styles <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "styles", "selector": sel }))
+            }
             Some(sub) => Err(ParseError::InvalidValue {
                 message: format!("Unknown get subcommand: {}", sub),
-                usage: "get <url|title|text> [args...]",
+                usage: "get <text|html|value|attr|url|title|count|box|styles> [args...]",
             }),
             None => Err(ParseError::MissingArguments {
                 context: "get".to_string(),
-                usage: "get <url|title|text> [args...]",
+                usage: "get <text|html|value|attr|url|title|count|box|styles> [args...]",
+            }),
+        },
+
+        // === Is ===
+        "is" => match rest.first().copied() {
+            Some("visible") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "is visible".to_string(),
+                    usage: "is visible <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "isvisible", "selector": sel }))
+            }
+            Some("enabled") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "is enabled".to_string(),
+                    usage: "is enabled <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "isenabled", "selector": sel }))
+            }
+            Some("checked") => {
+                let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "is checked".to_string(),
+                    usage: "is checked <selector>",
+                })?;
+                Ok(json!({ "id": id, "action": "ischecked", "selector": sel }))
+            }
+            Some(sub) => Err(ParseError::InvalidValue {
+                message: format!("Unknown is subcommand: {}", sub),
+                usage: "is <visible|enabled|checked> <selector>",
+            }),
+            None => Err(ParseError::MissingArguments {
+                context: "is".to_string(),
+                usage: "is <visible|enabled|checked> <selector>",
             }),
         },
 
@@ -353,5 +557,19 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
 
         // Non-core commands: preserve compatibility by letting the daemon respond.
         _ => Ok(json!({ "id": id, "action": cmd })),
+    };
+
+    // Explicitly request headed mode for this command (useful when connecting to an existing daemon).
+    if flags.headed {
+        if let Ok(ref mut v) = parsed {
+            let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+            if action != "install" {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("headless".to_string(), json!(false));
+                }
+            }
+        }
     }
+
+    parsed
 }
