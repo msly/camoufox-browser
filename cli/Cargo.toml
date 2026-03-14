@@ -1,0 +1,18 @@
+[package]
+name = "camoufox-browser"
+version = "0.1.0"
+edition = "2024"
+description = "Camoufox-backed browser automation CLI for AI agents"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "camoufox-browser"
+path = "src/main.rs"

@@ -1,0 +1,112 @@
+# camoufox-browser
+
+Camoufox-backed browser automation CLI for AI agents.
+
+Status: v0.1 “core drop-in” compatibility with `agent-browser` (core subset). Non-core commands return `Not yet implemented: <command>`.
+
+## Install
+
+```bash
+npm i -g camoufox-browser
+
+# Download Camoufox binaries (required before `open`)
+camoufox-browser install
+
+# Linux only: also install system libraries (uses sudo/root)
+camoufox-browser install --with-deps
+```
+
+## Quickstart (snapshot → refs → interact)
+
+```bash
+camoufox-browser open https://example.com
+camoufox-browser snapshot -i
+
+# Click an element from the snapshot (refs look like [ref=e1])
+camoufox-browser click @e1
+
+camoufox-browser get url
+camoufox-browser screenshot page.png
+camoufox-browser close
+```
+
+## JSON mode
+
+Use `--json` to get machine-friendly output:
+
+```bash
+camoufox-browser --json snapshot -i
+camoufox-browser --json get title
+```
+
+## Sessions
+
+Each session has its own long-lived daemon (browser instance). Use this to isolate runs:
+
+```bash
+camoufox-browser --session prod open https://example.com
+camoufox-browser --session prod snapshot -i
+camoufox-browser --session prod close
+```
+
+Environment variables:
+
+- `CAMOUFOX_BROWSER_SESSION` (alias: `AGENT_BROWSER_SESSION`)
+- `CAMOUFOX_BROWSER_SOCKET_DIR` (alias: `AGENT_BROWSER_SOCKET_DIR`)
+- `CAMOUFOX_BROWSER_IDLE_TIMEOUT_MS` (alias: `AGENT_BROWSER_IDLE_TIMEOUT_MS`)
+
+## Common flags (core)
+
+- `--headed` / `CAMOUFOX_BROWSER_HEADED=1`
+- `--debug` / `CAMOUFOX_BROWSER_DEBUG=1`
+- `--profile <dir>`: persistent context (durable cookies/storage)
+- `--state <path>`: load Playwright storageState on launch (ephemeral mode)
+- `--proxy <url>` / `--proxy-bypass <list>`
+- `--user-agent <ua>`
+- `--args "<comma-or-newline-separated args>"`
+
+## Command reference (v0.1 core)
+
+- Navigation: `open|goto|navigate`, `back`, `forward`, `reload`, `close`
+- Snapshot: `snapshot [-i] [-c] [-C] [--depth N] [--selector <css>]`
+- Interact: `click`, `fill`, `type`, `press`, `hover`, `check`, `uncheck`, `select`
+- Get: `get url|title|text`
+- Wait: `wait <ms|selector|@ref>` or `wait --url <pattern>` / `wait --load <state>` / `wait --text <text>`
+- Screenshot: `screenshot [selector|@ref] [path]` (also supports `--full-page`, `--format`, `--quality`)
+
+## More examples
+
+Snapshot scoped to a container:
+
+```bash
+camoufox-browser snapshot -i --selector "main"
+```
+
+Wait for a ref to become visible:
+
+```bash
+camoufox-browser wait @e1
+```
+
+Use a persistent profile directory:
+
+```bash
+camoufox-browser --profile ~/.camoufox-profile open https://example.com
+```
+
+## Why “npm package + Rust”?
+
+Camoufox/Playwright execution is Node-based, but the CLI is shipped as a native Rust binary for:
+
+- Faster cold-start per invocation (especially in agent loops)
+- Easier distribution of a single executable per platform
+- Keeping the Node daemon isolated as a long-lived process per session
+
+If the native binary can’t be downloaded or executed, `camoufox-browser` falls back to a JS implementation (`dist/cli.js`).
+
+## Troubleshooting
+
+- If you see an error about missing `~/.cache/camoufox/version.json`, run `camoufox-browser install`.
+- If you use `pnpm` and see `better-sqlite3` “Could not locate the bindings file”, run:
+  - `pnpm -C camoufox-browser install`
+  - `pnpm -C camoufox-browser rebuild better-sqlite3`

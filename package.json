@@ -1,0 +1,54 @@
+{
+  "name": "camoufox-browser",
+  "version": "0.1.0",
+  "description": "Camoufox-backed browser automation CLI for AI agents (core agent-browser compatible)",
+  "type": "module",
+  "bin": {
+    "camoufox-browser": "./bin/camoufox-browser.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "scripts",
+    "skills"
+  ],
+  "scripts": {
+    "build": "node scripts/clean-dist.js && tsc",
+    "dev": "tsx src/daemon.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build",
+    "build:native": "cargo build --release --manifest-path cli/Cargo.toml && node scripts/copy-native.js",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "dependencies": {
+    "camoufox-js": "^0.9.1",
+    "playwright-core": "^1.57.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.16"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "automation",
+    "camoufox",
+    "anti-detect",
+    "playwright",
+    "cli",
+    "agent"
+  ]
+}
