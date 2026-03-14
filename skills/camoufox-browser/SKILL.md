@@ -1,6 +1,6 @@
 ---
 name: camoufox-browser
-description: Camoufox-backed browser automation CLI for AI agents. Core drop-in compatible with agent-browser (WIP).
+description: Camoufox-backed browser automation CLI for AI agents. Core drop-in compatible with agent-browser (core + high-frequency).
 allowed-tools: Bash(camoufox-browser:*)
 ---
 
@@ -12,6 +12,7 @@ Use `camoufox-browser` when a site blocks standard Playwright/Chromium automatio
 
 - If navigation fails with a Camoufox “not installed” error, run: `camoufox-browser install` (Linux: add `--with-deps` if needed).
 - Prefer using a dedicated session per task to avoid cross-run state bleed: `--session <name>`.
+- `--headed` is applied at browser launch time. If a session already has a running headless browser, running `--headed open|goto|navigate ...` will relaunch that session to apply headed mode (this may close existing pages/tabs for that session).
 
 ## Workflow
 
@@ -33,6 +34,27 @@ Use `camoufox-browser` when a site blocks standard Playwright/Chromium automatio
    - `camoufox-browser --session <s> screenshot page.png`
 7. Cleanup:
    - `camoufox-browser --session <s> close`
+
+## High-frequency commands (drop-in)
+
+- Tabs:
+  - `camoufox-browser --session <s> tab new [url]`
+  - `camoufox-browser --session <s> tab list` (or just `tab`)
+  - `camoufox-browser --session <s> tab 2`
+  - `camoufox-browser --session <s> tab close [index]`
+- Evaluate JS:
+  - `camoufox-browser --session <s> eval "document.title"`
+  - `camoufox-browser --session <s> eval -b ZG9jdW1lbnQudGl0bGU=` (base64)
+  - `cat script.js | camoufox-browser --session <s> eval --stdin`
+- Scroll:
+  - `camoufox-browser --session <s> scroll down 300`
+  - `camoufox-browser --session <s> scroll --selector ".panel" down 500`
+  - `camoufox-browser --session <s> scrollintoview @e1`
+- Get / Is:
+  - `camoufox-browser --session <s> get html @e1`
+  - `camoufox-browser --session <s> get attr @e1 href`
+  - `camoufox-browser --session <s> get count "a"`
+  - `camoufox-browser --session <s> is visible @e1`
 
 ## Output guidance
 
