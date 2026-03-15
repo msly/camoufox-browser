@@ -40,16 +40,16 @@ jobs:
             use_cross: true
             target: aarch64-unknown-linux-gnu
             allow_failure: false
-          - runner: macos-13
+          - runner: macos-14
             os_key: darwin
-            arch_key: x64
+            arch_key: arm64
             ext: ""
             use_cross: false
             target: ""
             allow_failure: false
-          - runner: macos-14
+          - runner: macos-15-intel
             os_key: darwin
-            arch_key: arm64
+            arch_key: x64
             ext: ""
             use_cross: false
             target: ""
@@ -83,12 +83,19 @@ jobs:
         with:
           tool: cross
 
+      - name: Install Rust target (darwin x64)
+        if: ${{ matrix.target != '' && !matrix.use_cross }}
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
+
       - name: Build (release)
         shell: bash
         run: |
           set -euo pipefail
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --locked --manifest-path cli/Cargo.toml --target "${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" != "" ]; then
+            cargo build --release --locked --manifest-path cli/Cargo.toml --target "${{ matrix.target }}"
           else
             cargo build --release --locked --manifest-path cli/Cargo.toml
           fi
@@ -99,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           ASSET_NAME="camoufox-browser-${{ matrix.os_key }}-${{ matrix.arch_key }}${{ matrix.ext }}"
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
+          if [ "${{ matrix.target }}" != "" ]; then
             SRC="cli/target/${{ matrix.target }}/release/camoufox-browser${{ matrix.ext }}"
           else
             SRC="cli/target/release/camoufox-browser${{ matrix.ext }}"
@@ -146,4 +153,3 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: dist/*
-
